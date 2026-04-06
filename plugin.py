@@ -6,6 +6,7 @@ import json
 import os
 
 from mirastack_sdk import (
+    Action,
     ConfigParam,
     Plugin,
     PluginInfo,
@@ -15,6 +16,8 @@ from mirastack_sdk import (
     DevOpsStage,
     ExecuteRequest,
     ExecuteResponse,
+    respond_map,
+    respond_error,
     serve,
 )
 from mirastack_sdk.datetimeutils import format_rfc3339
@@ -39,51 +42,85 @@ class QueryLogsPlugin(Plugin):
             description="Query VictoriaLogs for log data using LogsQL",
             permissions=[Permission.READ],
             devops_stages=[DevOpsStage.OBSERVE],
+            actions=[
+                Action(
+                    id="query",
+                    description="Query logs using LogsQL",
+                    permission=Permission.READ,
+                    stages=[DevOpsStage.OBSERVE],
+                    input_params=[
+                        ParamSchema(name="logsql", type="string", required=True, description="LogsQL query expression"),
+                        ParamSchema(name="start", type="string", required=False, description="Start time"),
+                        ParamSchema(name="end", type="string", required=False, description="End time"),
+                        ParamSchema(name="limit", type="string", required=False, description="Max results (default 100)"),
+                    ],
+                    output_params=[ParamSchema(name="result", type="json", required=True, description="Matching log entries")],
+                ),
+                Action(
+                    id="tail",
+                    description="Tail live log entries matching a LogsQL query",
+                    permission=Permission.READ,
+                    stages=[DevOpsStage.OBSERVE],
+                    input_params=[
+                        ParamSchema(name="logsql", type="string", required=True, description="LogsQL query expression"),
+                        ParamSchema(name="limit", type="string", required=False, description="Max results (default 100)"),
+                    ],
+                    output_params=[ParamSchema(name="result", type="json", required=True, description="Live log entries")],
+                ),
+                Action(
+                    id="stats",
+                    description="Get statistics for logs matching a LogsQL query",
+                    permission=Permission.READ,
+                    stages=[DevOpsStage.OBSERVE],
+                    input_params=[
+                        ParamSchema(name="logsql", type="string", required=True, description="LogsQL query expression"),
+                        ParamSchema(name="start", type="string", required=False, description="Start time"),
+                        ParamSchema(name="end", type="string", required=False, description="End time"),
+                    ],
+                    output_params=[ParamSchema(name="result", type="json", required=True, description="Log statistics")],
+                ),
+                Action(
+                    id="field_names",
+                    description="List all field names in the log store",
+                    permission=Permission.READ,
+                    stages=[DevOpsStage.OBSERVE],
+                    output_params=[ParamSchema(name="result", type="json", required=True, description="Field names")],
+                ),
+                Action(
+                    id="field_values",
+                    description="List values for a specific log field",
+                    permission=Permission.READ,
+                    stages=[DevOpsStage.OBSERVE],
+                    input_params=[
+                        ParamSchema(name="field", type="string", required=True, description="Field name"),
+                        ParamSchema(name="limit", type="string", required=False, description="Max results (default 100)"),
+                    ],
+                    output_params=[ParamSchema(name="result", type="json", required=True, description="Field values")],
+                ),
+            ],
             config_params=[
                 ConfigParam(key="logs_url", type="string", required=True, description="VictoriaLogs base URL (e.g. http://victorialogs:9428)"),
             ],
         )
 
     def schema(self) -> PluginSchema:
-        return PluginSchema(
-            input_params=[
-                ParamSchema(name="action", type="string", required=True,
-                            description="One of: query, tail, stats, field_names, field_values"),
-                ParamSchema(name="logsql", type="string", required=False,
-                            description="LogsQL query expression"),
-                ParamSchema(name="start", type="string", required=False,
-                            description="Start time"),
-                ParamSchema(name="end", type="string", required=False,
-                            description="End time"),
-                ParamSchema(name="limit", type="string", required=False,
-                            description="Max results (default 100)"),
-                ParamSchema(name="field", type="string", required=False,
-                            description="Field name for field_values action"),
-            ],
-            output_params=[
-                ParamSchema(name="result", type="json", required=True,
-                            description="Query result as JSON"),
-            ],
-        )
+        info = self.info()
+        return PluginSchema(actions=info.actions)
 
     async def execute(self, req: ExecuteRequest) -> ExecuteResponse:
         if self._client is None:
-            return ExecuteResponse(
-                output={"error": "logs_url not configured — set MIRASTACK_LOGS_URL or push config via engine"},
-                logs=["ERROR: no logs client configured"],
-            )
+            resp = respond_error("logs_url not configured — set MIRASTACK_LOGS_URL or push config via engine")
+            resp.logs = ["ERROR: no logs client configured"]
+            return resp
 
-        action = req.params.get("action", "")
+        action = req.action_id or req.params.get("action", "")
         try:
             result = await self._dispatch(action, req.params, req.time_range)
-            return ExecuteResponse(
-                output={"result": json.dumps(result, default=str)},
-            )
+            return respond_map({"result": result})
         except Exception as e:
-            return ExecuteResponse(
-                output={"error": str(e)},
-                logs=[f"ERROR: {e}"],
-            )
+            resp = respond_error(str(e))
+            resp.logs = [f"ERROR: {e}"]
+            return resp
 
     async def _dispatch(self, action: str, params: dict, tr: TimeRange | None = None) -> dict | list:
         limit = int(params.get("limit", "100"))
