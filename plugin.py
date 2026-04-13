@@ -216,6 +216,12 @@ class QueryLogsPlugin(Plugin):
         else:
             start = params.get("start")
             end = params.get("end")
+            # Reject bare "-", "+" and whitespace-only values that would
+            # cause VictoriaLogs parse errors on the direct invocation path.
+            if start and start.strip() in ("", "-", "+"):
+                start = None
+            if end and end.strip() in ("", "-", "+"):
+                end = None
         match action:
             case "query":
                 return await self._client.query(
