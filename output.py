@@ -8,31 +8,31 @@ from typing import Any
 MAX_RESULT_LEN = 32000
 
 
-def enrich_logs_output(action: str, result: Any) -> dict[str, Any]:
+def enrich_logs_output(action: str, result: Any) -> dict[str, str]:
     """Wrap raw log result with metadata for LLM consumption."""
     raw = result if isinstance(result, str) else json.dumps(result, default=str)
 
-    output: dict[str, Any] = {
+    output: dict[str, str] = {
         "action": action,
-        "result": result,
+        "result": result if isinstance(result, str) else json.dumps(result, default=str),
     }
 
     if len(raw) > MAX_RESULT_LEN:
         output["result"] = raw[:MAX_RESULT_LEN]
-        output["truncated"] = True
+        output["truncated"] = "true"
 
     # For query/tail actions, count NDJSON lines (each non-empty line is a log entry).
     if action in ("query", "tail") and isinstance(raw, str):
         lines = [line for line in raw.strip().split("\n") if line.strip()]
-        output["result_count"] = len(lines)
+        output["result_count"] = str(len(lines))
 
     # For JSON array or values-key responses, extract count.
     parsed = result if isinstance(result, (dict, list)) else _try_parse(raw)
     if isinstance(parsed, list):
-        output["result_count"] = len(parsed)
+        output["result_count"] = str(len(parsed))
     elif isinstance(parsed, dict):
         if "values" in parsed and isinstance(parsed["values"], list):
-            output["result_count"] = len(parsed["values"])
+            output["result_count"] = str(len(parsed["values"]))
 
     return output
 
